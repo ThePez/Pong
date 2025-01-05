@@ -6,7 +6,7 @@ from PyQt5.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QPen, QPainterPath, QKeyEvent, QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem,
-    QAction, QWidget, QVBoxLayout, QGraphicsPathItem, QGraphicsTextItem)
+    QAction, QWidget, QVBoxLayout, QGraphicsPathItem, QGraphicsTextItem, QGridLayout, QLabel)
 
 WIDTH: int = 1500
 HEIGHT: int = 700
@@ -22,13 +22,18 @@ class Controller(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         # Window setup
+
         self.setWindowTitle('Pong')
+        self.setMinimumSize(1526, 920)
         central_widget: QWidget = QWidget(self)
         self.setCentralWidget(central_widget)
         central_layout: QVBoxLayout = QVBoxLayout()
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
         central_widget.setLayout(central_layout)
+
+        self.cpu_labels: list[QLabel] = []
+        self.setup_control_text(central_layout)
 
         # Engine and Graphic scene setup
         self.engine = Engine(WIDTH, HEIGHT)
@@ -50,14 +55,23 @@ class Controller(QMainWindow):
         self.paused: bool = False
         self.playing: bool = True
         self.paddles: list[Paddle] = []
+        self.hints: list[Paddle] = []
+        self.guides: list[bool] = [False, False]
+        self.cpus: list[bool] = [False, False]
         self.ball: Ball | None = None
         self.keys_held: set[int] = set()
         self.notification_text: QGraphicsTextItem | None = None
         self.player_score_and_rally: list[QGraphicsTextItem] = []
 
+        self.adjustSize()
+
         # Start the game
         self.add_border()
         self.init_game()
+
+    def print_window_size(self):
+        size = self.size()  # Get the current size of the window
+        print(f"Window size: {size.width()}x{size.height()}")  # Print width and height
 
     def add_menus(self) -> None:
         menu_bar = self.menuBar()
@@ -72,6 +86,40 @@ class Controller(QMainWindow):
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)  # type: ignore
         game_menu.addAction(exit_action)
+
+    def setup_control_text(self, layout) -> None:
+        # Create a wrapper layout to center the controls
+        # wrapper_layout = QVBoxLayout()
+        # layout.addLayout(wrapper_layout)
+
+        # Create the control layout
+        control_layout = QGridLayout()
+        layout.addLayout(control_layout)
+        # wrapper_layout.addLayout(control_layout)
+
+        # Center-align the control layout
+        # wrapper_layout.setAlignment(Qt.AlignCenter)
+
+        controls = QLabel("Controls")
+        controls.setFont(QFont('Arial', 16, QFont.Bold))
+        controls.setAlignment(Qt.AlignCenter)  # Center the text inside the label
+        player_one = QLabel("Player One\nUp: W  Hints: E\nDown: S  CPU: D")
+        player_one.setFont(QFont('Arial', 16, QFont.Bold))
+        player_one.setAlignment(Qt.AlignCenter)
+        player_two = QLabel("Player Two\nUp: O  Hints: I\nDown: K  CPU: J")
+        player_two.setFont(QFont('Arial', 16, QFont.Bold))
+        player_two.setAlignment(Qt.AlignCenter)
+
+        for player in range(2):
+            label = QLabel(f"CPU Inactive")
+            label.setFont(QFont('Arial', 16, QFont.Bold))
+            label.setAlignment(Qt.AlignCenter)
+            self.cpu_labels.append(label)
+            control_layout.addWidget(label, 2, (0 + player * 2), 1, 2)
+
+        control_layout.addWidget(controls, 0, 0, 1, 4)
+        control_layout.addWidget(player_one, 1, 0, 1, 2)
+        control_layout.addWidget(player_two, 1, 2, 1, 2)
 
     def init_game(self) -> None:
         self.engine.initialise()
@@ -88,31 +136,38 @@ class Controller(QMainWindow):
     def game_over(self, message: str) -> None:
         self.view_timer.stop()
         self.playing = False
-        self.engine.initialise()
+        self.engine.reset()
         self.render_ball()
         self.render_paddles()
         self.add_notification_text(message)
 
     def update_game(self) -> None:
+        # self.print_window_size()
         self.engine.check_game_over()
         if self.engine.check_goal() != "none":
             # Update score, reset ball
             self.engine.reset()
 
-        # Check for player one wanting to move paddle
-        if Qt.Key_W in self.keys_held:
-            self.engine.move_paddle(player=0, direction=-1)
-        elif Qt.Key_S in self.keys_held:
-            self.engine.move_paddle(player=0, direction=1)
+        # Ensure that player 1's cpu is off before trying to move
+        if not self.cpus[0]:
+            # Check for player one wanting to move paddle
+            if Qt.Key_W in self.keys_held:
+                self.engine.move_paddle(player=0, direction=-1)
+            elif Qt.Key_S in self.keys_held:
+                self.engine.move_paddle(player=0, direction=1)
 
-        # Check for player two wanting to move paddle
-        if Qt.Key_O in self.keys_held:
-            self.engine.move_paddle(player=1, direction=-1)
-        elif Qt.Key_K in self.keys_held:
-            self.engine.move_paddle(player=1, direction=1)
+        # Ensure the player 2's cpu is off before trying to move
+        if not self.cpus[1]:
+            # Check for player two wanting to move paddle
+            if Qt.Key_O in self.keys_held:
+                self.engine.move_paddle(player=1, direction=-1)
+            elif Qt.Key_K in self.keys_held:
+                self.engine.move_paddle(player=1, direction=1)
 
         self.engine.move_ball()
+        self.cpu_move_paddles()
         self.render_paddles()
+        self.render_guides()
         self.render_ball()
         self.update_score_and_rally_text()
 
@@ -178,7 +233,7 @@ class Controller(QMainWindow):
         x_pos = (self.scene_width - text_rectangle.width()) // 2
         y_pos = (self.scene_height - text_rectangle.height()) // 2
         self.notification_text.setPos(x_pos, y_pos)
-        self.notification_text.setZValue(2)
+        self.notification_text.setZValue(5)
         # Add the text item to the scene
         self.scene.addItem(self.notification_text)
 
@@ -195,12 +250,18 @@ class Controller(QMainWindow):
 
         self.paddles.clear()
         for player, paddle_position in enumerate(self.engine.paddles):
-            x, y = paddle_position
-            length: int = self.engine.paddle_sizes[player]
-            x_top_left = x - PADDLE_WIDTH // 2
-            y_top_left = y - length // 2
-            paddle = Paddle(x_top_left, y_top_left, PADDLE_WIDTH, length)
-            self.scene.addItem(paddle)
+            self.render_paddle(paddle_position, player)
+
+    def render_paddle(self, center: tuple[int, int], player: int, hint: bool = False) -> None:
+        x, y = center
+        length: int = self.engine.paddle_sizes[player]
+        x_top_left = x - PADDLE_WIDTH // 2
+        y_top_left = y - length // 2
+        paddle = Paddle(x_top_left, y_top_left, PADDLE_WIDTH, length, guide=hint)
+        self.scene.addItem(paddle)
+        if hint:
+            self.hints.append(paddle)
+        else:
             self.paddles.append(paddle)
 
     def render_ball(self) -> None:
@@ -211,27 +272,71 @@ class Controller(QMainWindow):
         x_top_left = x - BALL_RADIUS
         y_top_left = y - BALL_RADIUS
         self.ball = Ball(x_top_left, y_top_left, BALL_DIAMETER)
-        self.ball.setZValue(1)
         self.scene.addItem(self.ball)
+
+    def cpu_move_paddles(self) -> None:
+        ball_y = self.engine.ball_position[1]
+        tolerance: int = 10
+        for player in range(2):
+            # If cpu active, try to move, otherwise skip
+            if self.cpus[player]:
+                self.cpu_labels[player].setText("CPU Active")
+                paddle_y = self.engine.paddles[player][1]
+                if paddle_y > ball_y + tolerance:
+                    self.engine.move_paddle(player, -1)
+                elif paddle_y < ball_y - tolerance:
+                    self.engine.move_paddle(player, 1)
+            else:
+                self.cpu_labels[player].setText("CPU Inactive")
+
+    def render_guides(self) -> None:
+        for guide in self.hints:
+            self.scene.removeItem(guide)
+
+        self.hints.clear()
+        y: int = self.engine.ball_position[1]
+        one_x_pos: int = self.engine.paddles[0][0]
+        two_x_pos: int = self.engine.paddles[1][0]
+        for player in range(2):
+            # Guide must be on and CPU must be off for guides to be rendered
+            if self.guides[player] and not self.cpus[player]:
+                new_y = min(y, self.engine.board_height - self.engine.paddle_sizes[player] // 2 - 1)
+                new_y = max(new_y, self.engine.paddle_sizes[player] // 2 + 1)
+                x = one_x_pos if player == 0 else two_x_pos
+                self.render_paddle((x, new_y), player, hint=True)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         self.keys_held.add(event.key())
-        if event.key() == Qt.Key_Space:
+        if event.key() == Qt.Key_Space:  # Pause the game
             self.toggle_pause_game()
+        elif event.key() == Qt.Key_E:  # Player 1 Guide
+            self.guides[0] = self.guides[0] ^ True
+        elif event.key() == Qt.Key_I:  # Player 2 Guide
+            self.guides[1] = self.guides[1] ^ True
+        elif event.key() == Qt.Key_D:  # Player 1 activate CPU
+            self.cpus[0] = self.cpus[0] ^ True
+        elif event.key() == Qt.Key_J:  # Player 2 Activate CPU
+            self.cpus[1] = self.cpus[1] ^ True
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         self.keys_held.discard(event.key())  # will not throw an exception if event.key is not in the set
 
 
 class Paddle(QGraphicsPathItem):
-    def __init__(self, x: int, y: int, width: int, height: int, radius: int = 10) -> None:
+    def __init__(self, x: int, y: int, width: int, height: int, radius: int = 10, guide: bool = False) -> None:
         super().__init__()
         # Use a QPainterPath for a Rounded rectangle
         path = QPainterPath()
         path.addRoundedRect(x + BORDER_MARGIN, y + BORDER_MARGIN, width, height, radius, radius)
         self.setPath(path)
-        self.setBrush(QBrush(QColor("light green")))
-        pen = QPen(QColor("dark green"))
+        if guide:
+            self.setBrush(QBrush(QColor("light blue")))
+            pen = QPen(QColor("dark blue"))
+        else:
+            self.setBrush(QBrush(QColor("light green")))
+            pen = QPen(QColor("dark green"))
+            self.setZValue(1)
+
         pen.setWidth(2)
         self.setPen(pen)
 
@@ -240,6 +345,7 @@ class Ball(QGraphicsEllipseItem):
     def __init__(self, x: int, y: int, diameter: int) -> None:
         super().__init__(x + BORDER_MARGIN, y + BORDER_MARGIN, diameter, diameter)
         self.setBrush(QBrush(QColor("red")))
+        self.setZValue(2)
 
 
 class Engine(QObject):
