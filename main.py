@@ -2,7 +2,7 @@
 import sys
 import random
 from math import pi, sin, cos
-from PyQt5.QtCore import Qt, QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPen, QPainterPath, QKeyEvent, QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem,
@@ -13,16 +13,16 @@ HEIGHT: int = 700
 BALL_DIAMETER: int = 40
 BALL_RADIUS: int = BALL_DIAMETER // 2
 PADDLE_WIDTH: int = 60
+PADDLE_MOVE_PIXELS: int = 15
 BORDER_MARGIN: int = 10
 FPS: int = 60
-UPDATE_RATE: int = 1000 // FPS
+UPDATE_RATE: int = 1000 // FPS  # in milliseconds
 
 
 class Controller(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         # Window setup
-
         self.setWindowTitle('Pong')
         self.setMinimumSize(1526, 920)
         central_widget: QWidget = QWidget(self)
@@ -37,7 +37,6 @@ class Controller(QMainWindow):
 
         # Engine and Graphic scene setup
         self.engine = Engine(WIDTH, HEIGHT)
-        self.engine.game_over.connect(self.game_over)  # type: ignore
         self.scene_height: int = self.engine.board_height + 2 * BORDER_MARGIN
         self.scene_width: int = self.engine.board_width + 2 * BORDER_MARGIN
         self.scene = QGraphicsScene(0, 0, self.scene_width, self.scene_height)
@@ -48,8 +47,9 @@ class Controller(QMainWindow):
         self.view_timer = QTimer(self)
         self.view_timer.timeout.connect(self.update_game)  # type: ignore
 
-        # Add menu
+        # Add menu and border
         self.add_menus()
+        self.add_border()
 
         # Values to track
         self.paused: bool = False
@@ -57,16 +57,12 @@ class Controller(QMainWindow):
         self.paddles: list[Paddle] = []
         self.hints: list[Paddle] = []
         self.guides: list[bool] = [False, False]
-        self.cpus: list[bool] = [False, False]
         self.ball: Ball | None = None
         self.keys_held: set[int] = set()
         self.notification_text: QGraphicsTextItem | None = None
         self.player_score_and_rally: list[QGraphicsTextItem] = []
 
-        self.adjustSize()
-
         # Start the game
-        self.add_border()
         self.init_game()
 
     def print_window_size(self):
@@ -88,17 +84,9 @@ class Controller(QMainWindow):
         game_menu.addAction(exit_action)
 
     def setup_control_text(self, layout) -> None:
-        # Create a wrapper layout to center the controls
-        # wrapper_layout = QVBoxLayout()
-        # layout.addLayout(wrapper_layout)
-
         # Create the control layout
         control_layout = QGridLayout()
         layout.addLayout(control_layout)
-        # wrapper_layout.addLayout(control_layout)
-
-        # Center-align the control layout
-        # wrapper_layout.setAlignment(Qt.AlignCenter)
 
         controls = QLabel("Controls")
         controls.setFont(QFont('Arial', 16, QFont.Bold))
@@ -115,7 +103,7 @@ class Controller(QMainWindow):
             label.setFont(QFont('Arial', 16, QFont.Bold))
             label.setAlignment(Qt.AlignCenter)
             self.cpu_labels.append(label)
-            control_layout.addWidget(label, 2, (0 + player * 2), 1, 2)
+            control_layout.addWidget(label, 2, 0 + player * 2, 1, 2)
 
         control_layout.addWidget(controls, 0, 0, 1, 4)
         control_layout.addWidget(player_one, 1, 0, 1, 2)
@@ -142,14 +130,15 @@ class Controller(QMainWindow):
         self.add_notification_text(message)
 
     def update_game(self) -> None:
-        # self.print_window_size()
-        self.engine.check_game_over()
-        if self.engine.check_goal() != "none":
+        if message := self.engine.check_game_over():
+            self.game_over(message)
+
+        if _ := self.engine.check_goal():
             # Update score, reset ball
             self.engine.reset()
 
         # Ensure that player 1's cpu is off before trying to move
-        if not self.cpus[0]:
+        if not self.engine.cpus[0]:
             # Check for player one wanting to move paddle
             if Qt.Key_W in self.keys_held:
                 self.engine.move_paddle(player=0, direction=-1)
@@ -157,15 +146,19 @@ class Controller(QMainWindow):
                 self.engine.move_paddle(player=0, direction=1)
 
         # Ensure the player 2's cpu is off before trying to move
-        if not self.cpus[1]:
+        if not self.engine.cpus[1]:
             # Check for player two wanting to move paddle
             if Qt.Key_O in self.keys_held:
                 self.engine.move_paddle(player=1, direction=-1)
             elif Qt.Key_K in self.keys_held:
                 self.engine.move_paddle(player=1, direction=1)
 
+        for player in range(2):
+            text = "Active" if self.engine.cpus[player] else "Inactive"
+            self.cpu_labels[player].setText(f"CPU {text}")
+
         self.engine.move_ball()
-        self.cpu_move_paddles()
+        self.engine.cpu_move_paddles()
         self.render_paddles()
         self.render_guides()
         self.render_ball()
@@ -220,7 +213,6 @@ class Controller(QMainWindow):
                 x_pos = int(self.scene_width * 0.75 - text_rectangle.width())
                 y_pos = (self.scene_height - text_rectangle.height()) // 2
 
-            # print(f"player: {player}, {x_pos, y_pos}")
             text_item.setPos(x_pos, y_pos)
             self.player_score_and_rally.append(text_item)
             self.scene.addItem(text_item)
@@ -234,7 +226,6 @@ class Controller(QMainWindow):
         y_pos = (self.scene_height - text_rectangle.height()) // 2
         self.notification_text.setPos(x_pos, y_pos)
         self.notification_text.setZValue(5)
-        # Add the text item to the scene
         self.scene.addItem(self.notification_text)
 
     def add_border(self) -> None:
@@ -274,21 +265,6 @@ class Controller(QMainWindow):
         self.ball = Ball(x_top_left, y_top_left, BALL_DIAMETER)
         self.scene.addItem(self.ball)
 
-    def cpu_move_paddles(self) -> None:
-        ball_y = self.engine.ball_position[1]
-        tolerance: int = 10
-        for player in range(2):
-            # If cpu active, try to move, otherwise skip
-            if self.cpus[player]:
-                self.cpu_labels[player].setText("CPU Active")
-                paddle_y = self.engine.paddles[player][1]
-                if paddle_y > ball_y + tolerance:
-                    self.engine.move_paddle(player, -1)
-                elif paddle_y < ball_y - tolerance:
-                    self.engine.move_paddle(player, 1)
-            else:
-                self.cpu_labels[player].setText("CPU Inactive")
-
     def render_guides(self) -> None:
         for guide in self.hints:
             self.scene.removeItem(guide)
@@ -299,7 +275,7 @@ class Controller(QMainWindow):
         two_x_pos: int = self.engine.paddles[1][0]
         for player in range(2):
             # Guide must be on and CPU must be off for guides to be rendered
-            if self.guides[player] and not self.cpus[player]:
+            if self.guides[player] and not self.engine.cpus[player]:
                 new_y = min(y, self.engine.board_height - self.engine.paddle_sizes[player] // 2 - 1)
                 new_y = max(new_y, self.engine.paddle_sizes[player] // 2 + 1)
                 x = one_x_pos if player == 0 else two_x_pos
@@ -314,9 +290,9 @@ class Controller(QMainWindow):
         elif event.key() == Qt.Key_I:  # Player 2 Guide
             self.guides[1] = self.guides[1] ^ True
         elif event.key() == Qt.Key_D:  # Player 1 activate CPU
-            self.cpus[0] = self.cpus[0] ^ True
+            self.engine.cpus[0] = self.engine.cpus[0] ^ True
         elif event.key() == Qt.Key_J:  # Player 2 Activate CPU
-            self.cpus[1] = self.cpus[1] ^ True
+            self.engine.cpus[1] = self.engine.cpus[1] ^ True
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         self.keys_held.discard(event.key())  # will not throw an exception if event.key is not in the set
@@ -348,9 +324,7 @@ class Ball(QGraphicsEllipseItem):
         self.setZValue(2)
 
 
-class Engine(QObject):
-    game_over: pyqtSignal = pyqtSignal(str)
-
+class Engine:
     def __init__(self, width, height) -> None:
         super().__init__()
         # X will be left to right position data
@@ -360,7 +334,7 @@ class Engine(QObject):
 
         # Ball variables
         self._ball_directions: list[tuple[int, int]] = [(1, 0), (1, -1), (1, 1), (-1, 0), (-1, -1), (-1, 1)]
-        self.ball_move_amounts: list[tuple[int, int]] = [(x, y) for x in range(4, 11) for y in range(4, 11)]
+        self.ball_move_amounts: list[tuple[int, int]] = [(x, y) for x in range(10, 16) for y in range(5, 16)]
         self.ball_move_pixels: tuple[int, int] = 10, 5  # Defaults to 3 pixels each direction
         self.current_ball_direction: tuple[int, int] = (0, 0)
         self.ball_position: tuple[int, int] = (0, 0)  # Position data for the middle of the ball
@@ -368,23 +342,23 @@ class Engine(QObject):
         # Paddles variables
         self.paddles: list[tuple[int, int]] = [(0, 0), (0, 0)]  # Stored is the exact middle of the paddles
         self.paddle_sizes: list[int] = [120, 120]  # Each player's paddle Length in pixels
-        self.paddle_move_pixels: int = 10
 
         # Other variables
+        self.cpus: list[bool] = [False, False]
         self.scores: list[int] = [0, 0]  # Player scores
         self.rally_counter: list[int] = [0, 0]  # Each player's rally counter
 
     def initialise(self) -> None:
         self.scores = [0, 0]
+        initial_paddle_y = self.board_height // 2
+        self.paddles = [(0 + PADDLE_WIDTH // 2, initial_paddle_y),
+                        (self.board_width - PADDLE_WIDTH // 2, initial_paddle_y)]
         self.reset()
 
     def reset(self) -> None:
         self.current_ball_direction = random.choice(self._ball_directions)
         self.rally_counter = [0, 0]
         self.ball_position = self.board_width // 2, self.board_height // 2
-        initial_paddle_y = self.board_height // 2
-        self.paddles = [(0 + PADDLE_WIDTH // 2, initial_paddle_y),
-                        (self.board_width - PADDLE_WIDTH // 2, initial_paddle_y)]
 
     def check_wall_collision(self, new_y: int, offset: int) -> bool:
         top = new_y + offset
@@ -392,6 +366,10 @@ class Engine(QObject):
         return top > self.board_height or bottom < 0
 
     def check_ball_collision(self, player: int, new_y: int, offset: int) -> bool:
+        ball_x = self.ball_position[0]
+        if PADDLE_WIDTH * 2 < ball_x < self.board_width - PADDLE_WIDTH * 2:
+            return False
+
         ball_perimeter = get_circle_points(self.ball_position, BALL_RADIUS)
         paddle = self.paddles[player]
         paddle_perimeter = get_rounded_rectangle_points((paddle[0], new_y), PADDLE_WIDTH, offset, 10)
@@ -403,8 +381,8 @@ class Engine(QObject):
 
         return False
 
-    def move_paddle(self, player: int, direction: int) -> None:
-        new_y = self.paddles[player][1] + self.paddle_move_pixels * direction
+    def move_paddle(self, player: int, direction: int, pixels: int = PADDLE_MOVE_PIXELS) -> None:
+        new_y = self.paddles[player][1] + pixels * direction
         # Ensure the paddles reach the borders
         if direction > 0:
             # Down
@@ -423,8 +401,10 @@ class Engine(QObject):
         current_x, current_y = self.current_ball_direction
         new_ball_x = self.ball_position[0] + self.current_ball_direction[0] * self.ball_move_pixels[0]
         new_ball_y = self.ball_position[1] + self.current_ball_direction[1] * self.ball_move_pixels[1]
+        if PADDLE_WIDTH * 2 < new_ball_x < self.board_width - PADDLE_WIDTH * 2:
+            return False
+
         ball_perimeter: set[tuple[int, int]] = get_circle_points((new_ball_x, new_ball_y), BALL_RADIUS)
-        # print(sorted(ball_perimeter))
         for player, paddle in enumerate(self.paddles):
             paddle_perimeter = get_rounded_rectangle_points(paddle, PADDLE_WIDTH, self.paddle_sizes[player], 10)
             # left or right edge
@@ -460,7 +440,20 @@ class Engine(QObject):
 
         self.ball_position = new_x, new_y
 
-    def check_goal(self) -> str:
+    def cpu_move_paddles(self) -> None:
+        ball_y = self.ball_position[1]
+        for player in range(2):
+            # If cpu active, try to move, otherwise skip
+            if self.cpus[player]:
+                paddle_y = self.paddles[player][1]
+                gap: int = abs(paddle_y - ball_y)
+                pixels: int = min(gap, PADDLE_MOVE_PIXELS)
+                if paddle_y > ball_y:
+                    self.move_paddle(player, -1, pixels=pixels)
+                elif paddle_y < ball_y:
+                    self.move_paddle(player, 1, pixels=pixels)
+
+    def check_goal(self) -> str | None:
         new_x = self.ball_position[0] + self.current_ball_direction[0] * self.ball_move_pixels[0]
         if new_x <= BALL_RADIUS:
             self.scores[1] += 1
@@ -470,31 +463,23 @@ class Engine(QObject):
             self.scores[0] += 1
             return "one"
 
-        return "none"
+        return None
 
-    def check_game_over(self) -> None:
+    def check_game_over(self) -> str | None:
         for player, score in enumerate(self.scores):
             winner: str = "one" if player == 0 else "two"
-            if score == 3:
-                self.game_over.emit(f"Player {winner.capitalize()} won!")  # type: ignore
+            if score == 10:
+                return f"Player {winner.capitalize()} won!"
+
+        return None
 
 
 def get_circle_points(center: tuple[int, int],
                       radius: int,
-                      number_points: int = 72,
+                      number_points: int = 360,
                       start_angle: float = 0,
                       end_angle: float = 2 * pi
                       ) -> set[tuple[int, int]]:
-    """
-    Generate unique points on an arc or a full circle.
-    Args:
-        center (tuple[int, int]): Center of the circle (x, y).
-        radius (int): Radius of the circle.
-        number_points (int): Number of points to generate along the arc.
-        start_angle (float): Starting angle in radians (default: 0).
-        end_angle (float): Ending angle in radians (default: 2*pi).
-    Returns: set[tuple[int, int]]: Set of unique (x, y) points on the arc.
-    """
     points: set[tuple[int, int]] = set()
     for i in range(number_points + 1):  # +1 to include the endpoint
         theta = start_angle + (end_angle - start_angle) * i / number_points
@@ -509,7 +494,7 @@ def get_rounded_rectangle_points(center: tuple[int, int],
                                  width: int,
                                  height: int,
                                  radius: int,
-                                 num_arc_points: int = 15
+                                 num_arc_points: int = 90
                                  ) -> list[set[tuple[int, int]]]:
     # Ensure the radius is not larger than half of the rectangle's width or height
     radius = min(radius, width // 2, height // 2)
@@ -539,9 +524,9 @@ def get_rounded_rectangle_points(center: tuple[int, int],
     left_edge = {(left, y) for y in range(bottom - radius, top + radius - 1, -1)}
 
     # Combine all points into a set to ensure uniqueness
-    # perimeter_points = arc_tl | top_edge | arc_tr | right_edge | arc_br | bottom_edge | arc_bl | left_edge
-
-    return [right_edge, left_edge, arc_tl | top_edge | arc_tr, arc_br | bottom_edge | arc_bl]
+    bottom_set = arc_br | bottom_edge | arc_bl
+    top_set = arc_tl | top_edge | arc_tr
+    return [right_edge, left_edge, top_set, bottom_set]
 
 
 if __name__ == '__main__':
